@@ -2,10 +2,12 @@ import React, { useState } from "react";
 import ReactDOM from "react-dom/client";
 import LiveTurret from "./LiveTurret";
 import GuardianLens from "./GuardianLens";
+import GroundwaterLevels from "./GroundwaterLevels";
 
 const TOOLS = [
   { id: "turret", label: "the live turret", component: LiveTurret },
   { id: "guardian", label: "GuardianLens", component: GuardianLens },
+  { id: "groundwater", label: "Groundwater Levels", component: GroundwaterLevels },
 ];
 
 function App() {
