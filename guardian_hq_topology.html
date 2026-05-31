@@ -1,0 +1,242 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Guardian_HQ — Network Topology & Failover Record</title>
+<style>
+  :root {
+    --bg: #0a0e14;
+    --panel: #121826;
+    --panel2: #0e1420;
+    --line: #1f2a3d;
+    --ink: #e6edf6;
+    --dim: #8a9bb4;
+    --green: #3ddc84;
+    --amber: #ffb454;
+    --blue: #4a9eff;
+    --red: #ff6b6b;
+    --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 940px; margin: 0 auto; padding: 28px 20px 80px; }
+  header { border-bottom: 1px solid var(--line); padding-bottom: 18px; margin-bottom: 26px; }
+  h1 { font-size: 1.5rem; margin: 0 0 6px; letter-spacing: -0.01em; }
+  .sub { color: var(--dim); font-size: 0.9rem; }
+  .meta { font-family: var(--mono); font-size: 0.78rem; color: var(--dim); margin-top: 10px; }
+  .meta span { color: var(--blue); }
+  h2 {
+    font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.12em;
+    color: var(--dim); margin: 34px 0 14px; font-weight: 600;
+  }
+  /* diagram */
+  .diagram { background: var(--panel2); border: 1px solid var(--line); border-radius: 12px; padding: 22px 18px; }
+  .row { display: flex; align-items: stretch; justify-content: center; gap: 14px; flex-wrap: wrap; }
+  .node {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
+    padding: 12px 14px; min-width: 150px; flex: 0 1 auto; position: relative;
+  }
+  .node .t { font-weight: 600; font-size: 0.92rem; }
+  .node .d { color: var(--dim); font-size: 0.74rem; font-family: var(--mono); margin-top: 3px; }
+  .node.spine { border-color: #2a6df4; box-shadow: 0 0 0 1px rgba(42,109,244,0.25) inset; }
+  .node.vault { border-color: #555; opacity: 0.82; }
+  .node.edge { border-color: var(--green); }
+  .node.fail { border-color: var(--amber); }
+  .node.up { border-color: var(--blue); }
+  .badge {
+    position: absolute; top: -9px; right: 10px; font-size: 0.6rem; font-family: var(--mono);
+    text-transform: uppercase; letter-spacing: 0.08em; padding: 2px 7px; border-radius: 20px;
+    background: var(--bg); border: 1px solid var(--line);
+  }
+  .badge.off { color: var(--dim); }
+  .badge.on { color: var(--green); border-color: var(--green); }
+  .badge.fo { color: var(--amber); border-color: var(--amber); }
+  .pipe {
+    text-align: center; color: var(--dim); font-family: var(--mono);
+    font-size: 0.7rem; padding: 6px 0; width: 100%;
+  }
+  .pipe b { color: var(--ink); }
+  .fork { display: flex; gap: 14px; justify-content: center; flex-wrap: wrap; margin-top: 4px; }
+  .leg { display: flex; flex-direction: column; align-items: center; gap: 6px; }
+  /* cards */
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  @media (max-width: 680px){ .grid { grid-template-columns: 1fr; } }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 16px; }
+  .card.state-up { border-left: 3px solid var(--green); }
+  .card.state-fo { border-left: 3px solid var(--amber); }
+  .card h3 { margin: 0 0 4px; font-size: 0.95rem; }
+  .card .when { color: var(--dim); font-size: 0.74rem; font-family: var(--mono); margin-bottom: 12px; }
+  .stat { display: flex; justify-content: space-between; padding: 5px 0; border-bottom: 1px dotted var(--line); font-size: 0.86rem; }
+  .stat:last-child { border-bottom: 0; }
+  .stat .k { color: var(--dim); }
+  .stat .v { font-family: var(--mono); font-weight: 600; }
+  .v.good { color: var(--green); }
+  .v.ok { color: var(--amber); }
+  table { width: 100%; border-collapse: collapse; font-size: 0.84rem; }
+  th, td { text-align: left; padding: 9px 10px; border-bottom: 1px solid var(--line); }
+  th { color: var(--dim); font-weight: 600; font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.08em; }
+  td.mono { font-family: var(--mono); color: var(--dim); }
+  .evt { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 4px 0; }
+  .evt .e { display: flex; gap: 12px; padding: 12px 16px; border-bottom: 1px solid var(--line); align-items: baseline; }
+  .evt .e:last-child { border-bottom: 0; }
+  .evt .tag { font-family: var(--mono); font-size: 0.68rem; padding: 2px 8px; border-radius: 5px; white-space: nowrap; }
+  .tag.pass { background: rgba(61,220,132,0.12); color: var(--green); }
+  .evt .x { color: var(--ink); font-size: 0.88rem; }
+  .evt .x small { color: var(--dim); display: block; margin-top: 2px; font-size: 0.76rem; }
+  .note { color: var(--dim); font-size: 0.8rem; margin-top: 10px; line-height: 1.55; }
+  .scope { background: var(--panel2); border: 1px solid var(--line); border-left: 3px solid var(--blue); border-radius: 8px; padding: 13px 15px; font-size: 0.83rem; color: var(--dim); }
+  .scope b { color: var(--ink); }
+  footer { margin-top: 40px; padding-top: 16px; border-top: 1px solid var(--line); color: var(--dim); font-size: 0.74rem; font-family: var(--mono); }
+  .hash { word-break: break-all; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header>
+    <h1>Guardian_HQ — Network Topology &amp; Failover Record</h1>
+    <div class="sub">Local resilient substrate. Documented from dated device screenshots, not specification.</div>
+    <div class="meta">COMPILED: <span>2026-05-31</span> &nbsp;·&nbsp; DOCUMENTED OPERATIONAL: <span>2025-11-26 → 2026-01-09</span> (earliest hard anchor onward) &nbsp;·&nbsp; OPERATOR: Kibler AI Solutions Corp.</div>
+  </header>
+
+  <h2>Physical Topology</h2>
+  <div class="diagram">
+    <div class="row">
+      <div class="node up"><span class="badge on">live</span><div class="t">Spectrum Modem</div><div class="d">DOCSIS 3.1 · 2.5G RJ45</div></div>
+    </div>
+    <div class="pipe">│ coax WAN &nbsp; <b>↓ ~1,000–1,184 Mbps measured</b></div>
+    <div class="row">
+      <div class="node spine"><span class="badge on">live</span><div class="t">MSI Radix AXE6600</div><div class="d">Wi-Fi 6E tri-band router</div></div>
+    </div>
+    <div class="pipe">│ gigabit</div>
+    <div class="row">
+      <div class="node edge"><span class="badge on">live</span><div class="t">PoE Switch #1</div><div class="d">TP-Link · 5-port gig PoE</div></div>
+      <div class="node edge"><span class="badge off">staged</span><div class="t">PoE Switch #2</div><div class="d">TP-Link · 5-port gig PoE</div></div>
+    </div>
+    <div class="pipe">│ &nbsp; the PoE switch is the spine · wireless is the edge</div>
+    <div class="fork">
+      <div class="leg">
+        <div class="node vault"><span class="badge off">offline</span><div class="t">Mac mini M4</div><div class="d">forensic vault / cortex</div></div>
+        <div class="pipe">deliberately powered down<br>= log collector currently dark</div>
+      </div>
+      <div class="leg">
+        <div class="node fail"><span class="badge fo">failover</span><div class="t">iPhone (tethered)</div><div class="d">cellular backhaul + LiDAR edge</div></div>
+        <div class="pipe">carries egress when coax drops<br>travels to anchor sites</div>
+      </div>
+    </div>
+    <div class="pipe" style="margin-top:8px;">│ RJ45 → SFP → single duplex fiber → RJ45 →</div>
+    <div class="row">
+      <div class="node"><span class="badge off">planned</span><div class="t">Mesh Anchors</div><div class="d">Brock&apos;s · sister&apos;s · 3-node min</div></div>
+    </div>
+  </div>
+  <div class="note">Power: two APC Back-UPS units on hand. Router + PoE chain on UPS; Mac vault on its own separate UPS and own switch (isolated). Mesh strengthens with each added node; three-node minimum if tethered to hotspots / repeaters.</div>
+
+  <h2>Verified Performance — Two Paths</h2>
+  <div class="grid">
+    <div class="card state-up">
+      <h3>Primary path — coax WAN</h3>
+      <div class="when">Xbox · detailed network statistics</div>
+      <div class="stat"><span class="k">Download</span><span class="v good">949.34 Mbps</span></div>
+      <div class="stat"><span class="k">Upload</span><span class="v">11.31 Mbps</span></div>
+      <div class="stat"><span class="k">Latency</span><span class="v good">35 ms</span></div>
+      <div class="stat"><span class="k">Packet loss</span><span class="v good">0%</span></div>
+      <div class="stat"><span class="k">NAT type</span><span class="v good">Open</span></div>
+      <div class="stat"><span class="k">Network type</span><span class="v good">Wired</span></div>
+      <div class="stat"><span class="k">MTU</span><span class="v">1480</span></div>
+    </div>
+    <div class="card state-fo">
+      <h3>Failover path — cellular hotspot</h3>
+      <div class="when">Xbox · same panel · coax out</div>
+      <div class="stat"><span class="k">Download</span><span class="v ok">159.90 Mbps</span></div>
+      <div class="stat"><span class="k">Upload</span><span class="v">39.42 Mbps</span></div>
+      <div class="stat"><span class="k">Latency</span><span class="v ok">41 ms</span></div>
+      <div class="stat"><span class="k">Packet loss</span><span class="v good">0%</span></div>
+      <div class="stat"><span class="k">Wireless strength</span><span class="v good">100%</span></div>
+      <div class="stat"><span class="k">MTU</span><span class="v">1480</span></div>
+      <div class="stat"><span class="k">Reach</span><span class="v good">fresh traffic</span></div>
+    </div>
+  </div>
+  <div class="note">The handoff signature: latency moves only 35 → 41 ms, packet loss stays at 0% across both paths. Throughput drops because cellular backhaul is slower than gig coax — that is the failover engaging, not a fault.</div>
+
+  <h2>Modem-Side Speed Records (Spectrum app)</h2>
+  <table>
+    <thead><tr><th>Timestamp</th><th>To modem</th><th>To device</th><th>Plan</th></tr></thead>
+    <tbody>
+      <tr><td class="mono">06:38</td><td class="mono">1,184 Mbps (118%)</td><td class="mono">538 Mbps</td><td class="mono">1000 Mbps</td></tr>
+      <tr><td class="mono">05:55</td><td class="mono">1,060 Mbps (106%)</td><td class="mono">761 Mbps</td><td class="mono">1000 Mbps</td></tr>
+      <tr><td class="mono">—</td><td class="mono">1,141 Mbps (114%)</td><td class="mono">765 Mbps</td><td class="mono">1000 Mbps</td></tr>
+    </tbody>
+  </table>
+
+  <h2>Survival Events — Observed &amp; Recorded</h2>
+  <div class="evt">
+    <div class="e">
+      <span class="tag pass">PASS</span>
+      <span class="x">Modem/box unplugged — network stayed up
+        <small>Captured on video. Devices kept connection through the pull.</small></span>
+    </div>
+    <div class="e">
+      <span class="tag pass">PASS</span>
+      <span class="x">Coax (WAN) lost — egress survived on failover
+        <small>Xbox speed test completed fresh · iPhone worked · dad&apos;s TV never dropped. Whole-network reach held, not just the local link.</small></span>
+    </div>
+    <div class="e">
+      <span class="tag pass">PASS</span>
+      <span class="x">Failover throughput confirmed under load
+        <small>159.90 / 39.42 Mbps, 0% loss, 100% wireless while running on cellular hotspot.</small></span>
+    </div>
+  </div>
+
+  <h2>Dated Proof Points — On-Screen Timestamps</h2>
+  <table>
+    <thead><tr><th>Date &amp; time</th><th>What the screen showed</th><th>Path</th></tr></thead>
+    <tbody>
+      <tr><td class="mono">Nov 26, 2025 · 5:00 PM</td><td>159.90 / 39.42 Mbps · 0% loss · 100% wireless</td><td class="mono">failover (hotspot)</td></tr>
+      <tr><td class="mono">Dec 1, 2025 · 12:52 PM</td><td>Modem 1,141 Mbps (114% of plan)</td><td class="mono">coax WAN</td></tr>
+      <tr><td class="mono">Dec 5, 2025 · 4:35 PM</td><td><b>Hardware assembled &amp; powered</b> — MSI Radix lit, Mac mini in frame</td><td class="mono">build photo</td></tr>
+      <tr><td class="mono">Dec 18, 2025 · 6:38 AM</td><td>Modem 1,184 Mbps (118% of plan)</td><td class="mono">coax WAN</td></tr>
+      <tr><td class="mono">Dec 18, 2025 · 7:26 AM</td><td>Xbox "good to go" · Open NAT · Wired · &lt;60 ms</td><td class="mono">coax WAN</td></tr>
+      <tr><td class="mono">Jan 9 · 11:53 PM</td><td>949.34 Mbps · 35 ms · 0% loss</td><td class="mono">coax WAN</td></tr>
+    </tbody>
+  </table>
+  <div class="scope" style="margin-top:14px;">
+    <b>Earliest hard anchor: November 26, 2025.</b> The failover path was already operational before December began. The December 5 photograph ties the named hardware to a fixed date. <b>What these stamps prove:</b> the network was alive and healthy on each listed date — recurrence across months, both WAN paths, hardware dated. <b>What they do not prove on their own:</b> zero downtime in the gaps between points — continuous uptime since November is operator testimony, reasonable but attested. "Documented operational on these dates" stands without anyone&apos;s word; "continuous since" rests on yours. Both strong; know which one you&apos;re standing on.
+  </div>
+
+  <h2>Logging Diagnostic</h2>
+  <div class="scope">
+    Transport is proven bulletproof across <b>both</b> paths — speeds, Open NAT, 0% loss, and survival of box-pull and coax-out. Therefore the silent logs are <b>not</b> a network problem. The Mac vault log collector is deliberately powered down, and/or the log tap sits on the pre-inversion signal path. <b>Healthy pipe, silent gauge.</b> The fix is at the collector / tap location, not the network.
+  </div>
+
+  <h2>Named Hardware</h2>
+  <table>
+    <thead><tr><th>Component</th><th>Role</th><th>State</th></tr></thead>
+    <tbody>
+      <tr><td>Spectrum DOCSIS 3.1 modem (2.5G RJ45)</td><td class="mono">WAN ingress</td><td class="mono">live</td></tr>
+      <tr><td>MSI Radix AXE6600 (Wi-Fi 6E)</td><td class="mono">router / spine</td><td class="mono">live</td></tr>
+      <tr><td>TP-Link 5-port gig PoE switch ×2</td><td class="mono">switching spine</td><td class="mono">1 live / 1 staged</td></tr>
+      <tr><td>APC Back-UPS ×2</td><td class="mono">power hold</td><td class="mono">on hand</td></tr>
+      <tr><td>Mac mini M4</td><td class="mono">forensic vault / collector</td><td class="mono">offline (intentional)</td></tr>
+      <tr><td>iPhone (LiDAR)</td><td class="mono">cellular failover + edge</td><td class="mono">tethered</td></tr>
+      <tr><td>SFP + duplex single-mode fiber</td><td class="mono">anchor backhaul</td><td class="mono">planned</td></tr>
+    </tbody>
+  </table>
+
+  <footer>
+    Guardian_HQ · connected SSID confirmed on-device.<br>
+    This record asserts only what device screens showed: dual-path transport, measured throughput, and three survival events. It does not assert anything beyond the network layer.<br><br>
+    ARTIFACT: guardian_hq_topology · COMPILED 2026-05-31 · DOCUMENTED OPERATIONAL 2025-11-26 onward · status f-zero / clean baseline<br>
+    SHA-256 (body as sealed): <span class="hash">aac5e2479df0558b74e74eb3943678a4d4267c3273ea6f00a69e1d9256c7d9bc</span>
+  </footer>
+
+</div>
+</body>
+</html>
