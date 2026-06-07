@@ -51,48 +51,88 @@ PRIMARY = ("M2", "S2")
 def _mean(xs):
     return sum(xs) / len(xs) if xs else 0.0
 
-def detrend(values):
+def detrend(values, times_h=None):
     """Remove linear trend (least squares). A sloping water table is not tide;
-    removing it stops the slope leaking broadband power into low frequencies."""
+    removing it stops the slope leaking broadband power into low frequencies.
+
+    If times_h is supplied the trend is fit against ACTUAL time, which is the
+    correct thing when samples are unevenly spaced or the record has gaps - an
+    index-space fit silently mis-models the slope across a gap. Falls back to
+    sample index when no times are given."""
     n = len(values)
     if n < 3:
         return list(values)
-    xm = (n - 1) / 2.0
+    xs = list(times_h) if (times_h is not None and len(times_h) == n) else list(range(n))
+    xm = _mean(xs)
     ym = _mean(values)
-    sxx = sum((i - xm) ** 2 for i in range(n))
-    sxy = sum((i - xm) * (values[i] - ym) for i in range(n))
+    sxx = sum((x - xm) ** 2 for x in xs)
+    sxy = sum((xs[i] - xm) * (values[i] - ym) for i in range(n))
     slope = sxy / sxx if sxx else 0.0
     intercept = ym - slope * xm
-    return [values[i] - (slope * i + intercept) for i in range(n)]
+    return [values[i] - (slope * xs[i] + intercept) for i in range(n)]
 
 def power_at(times_h, values, period_h):
-    """Normalized periodogram power at a given period.
-    Lomb-style projection onto sin/cos at that frequency; handles uneven dt."""
+    """Lomb-Scargle periodogram power at a given period, normalized by variance.
+
+    This is the real Lomb-Scargle estimator (Scargle 1982), not a bare DFT
+    projection: a time-offset tau is chosen so the sine and cosine sums are
+    orthogonal, which makes the estimate phase-invariant and UNBIASED on
+    unevenly sampled / gappy records. The normalization (divide by 2*sigma^2)
+    is the one for which the single-frequency false-alarm probability is
+    exp(-power), so power_at can drive a real significance test (see
+    false_alarm_prob). Ratios of two power_at values are scale-free, so the
+    sharp-line ratio is unaffected by the choice of normalization."""
     n = len(values)
     if n < 4 or period_h <= 0:
         return 0.0
     w = 2.0 * math.pi / period_h
     m = _mean(values)
-    sr = si = var = 0.0
+    # Scargle time offset: tan(2*w*tau) = sum sin(2 w t) / sum cos(2 w t)
+    s2 = sum(math.sin(2.0 * w * t) for t in times_h)
+    c2 = sum(math.cos(2.0 * w * t) for t in times_h)
+    tau = 0.5 * math.atan2(s2, c2) / w
+    xc = xs = cc = ss = var = 0.0
     for i in range(n):
         v = values[i] - m
-        a = w * times_h[i]
-        sr += v * math.cos(a)
-        si += v * math.sin(a)
+        a = w * (times_h[i] - tau)
+        ca = math.cos(a); sa = math.sin(a)
+        xc += v * ca; xs += v * sa
+        cc += ca * ca; ss += sa * sa
         var += v * v
-    if var <= 0:
+    if var <= 0 or cc <= 0 or ss <= 0:
         return 0.0
-    # power as fraction of variance explained at this frequency
-    return (sr * sr + si * si) / (n * 0.5 * var)
+    sigma2 = var / (n - 1)            # sample variance
+    return (xc * xc / cc + xs * xs / ss) / (2.0 * sigma2)
 
 def phase_at(times_h, values, period_h):
-    """Phase (radians) of the component at period_h. For cross-channel lag."""
+    """Phase (radians) of the component at period_h. For cross-channel lag.
+    Uses the same Scargle tau offset as power_at so the phase is consistent and
+    well-defined on uneven sampling."""
     n = len(values); w = 2.0 * math.pi / period_h; m = _mean(values)
+    s2 = sum(math.sin(2.0 * w * t) for t in times_h)
+    c2 = sum(math.cos(2.0 * w * t) for t in times_h)
+    tau = 0.5 * math.atan2(s2, c2) / w
     sr = si = 0.0
     for i in range(n):
-        v = values[i] - m; a = w * times_h[i]
+        v = values[i] - m; a = w * (times_h[i] - tau)
         sr += v * math.cos(a); si += v * math.sin(a)
-    return math.atan2(si, sr)
+    # add back the tau shift so the returned phase is referenced to t=0
+    return math.atan2(si, sr) + w * tau
+
+def false_alarm_prob(times_h, values, period_h, n_indep=None):
+    """Probability that white noise alone would produce a Lomb-Scargle peak at
+    least this strong at period_h - the significance the bare ratio never gave.
+
+    Single-frequency FAP for the normalized periodogram is exp(-power); over
+    n_indep independent frequencies it is 1 - (1 - exp(-power))^n_indep. The
+    Horne & Baliunas (1986) count is used for n_indep when not supplied. A real
+    line returns ~0; broadband noise returns ~1, regardless of the ratio."""
+    p = power_at(times_h, values, period_h)
+    n = len(values)
+    if n_indep is None:
+        n_indep = max(1.0, -6.362 + 1.193 * n + 0.00098 * n * n)
+    single = math.exp(-p)
+    return 1.0 - (1.0 - single) ** n_indep
 
 def peak_period_near(times_h, values, target_h, search_h=0.5, steps=400):
     """Find THIS constituent's own spectral peak, isolated from its neighbours.
@@ -135,16 +175,30 @@ def peak_period_near(times_h, values, target_h, search_h=0.5, steps=400):
     return best_P, best_p, abs(best_P - target_h)
 
 
-def sharp_line_ratio(times_h, values, period_h, band=(9.0, 30.0), exclude_h=0.30):
-    """The discriminator: power AT period_h divided by the MEDIAN power across a
-    neighbourhood band, EXCLUDING bins near any known constituent. A narrow real
-    line >> background -> high ratio. A broad drift bump -> ratio near 1."""
+def sharp_line_ratio(times_h, values, period_h, half_width_h=3.0, exclude_h=0.30,
+                     band=None):
+    """The discriminator: power AT period_h divided by the MEDIAN power in a LOCAL
+    neighbourhood (period_h +/- half_width_h), EXCLUDING bins near any known
+    constituent. A narrow real line >> local background -> high ratio. A broad
+    drift bump -> ratio near 1.
+
+    LOCAL, not a fixed wide band, on purpose: real groundwater (and most natural
+    spectra) carries RED noise whose floor rises toward low frequency. Measuring
+    the background right next to the line cancels that tilt, so the ratio is a
+    true local SNR instead of being biased by where the line sits in a wide band.
+    Pass band=(lo,hi) to force the old global window if a flat-noise comparison
+    is wanted."""
     p0 = power_at(times_h, values, period_h)
     bg = []
-    steps = 120
-    lo, hi = band
-    for s in range(steps + 1):
-        P = lo * math.pow(hi / lo, s / steps)
+    steps = 100
+    if band is not None:
+        lo, hi = band
+        grid = (lo * math.pow(hi / lo, s / steps) for s in range(steps + 1))
+    else:
+        lo = max(period_h - half_width_h, 1.0)
+        hi = period_h + half_width_h
+        grid = (lo + (hi - lo) * s / steps for s in range(steps + 1))
+    for P in grid:
         # skip bins close to ANY constituent so lines don't inflate the background
         if any(abs(P - c) < exclude_h for c in CONSTITUENTS.values()):
             continue
@@ -166,9 +220,11 @@ def analyze(times_h, values, constituents=PRIMARY):
     plus record length and the resolution caveat (M2 vs S2 need ~long records)."""
     if len(values) < 24:
         return {"error": f"too few samples ({len(values)}) - need a longer record"}
-    v = detrend(values)
+    v = detrend(values, times_h)
     rec_h = _record_hours(times_h)
     rec_days = rec_h / 24.0
+    # one independent-frequency count for the whole record, reused per line
+    n_indep = max(1.0, -6.362 + 1.193 * len(v) + 0.00098 * len(v) * len(v))
 
     # Rayleigh resolution: can we separate M2 from S2? need T > 1/|f_M2 - f_S2|
     df = abs(1/CONSTITUENTS["M2"] - 1/CONSTITUENTS["S2"])
@@ -185,24 +241,29 @@ def analyze(times_h, values, constituents=PRIMARY):
         P = CONSTITUENTS[name]
         ratio = sharp_line_ratio(times_h, v, P)
         peak_P, peak_pw, offset = peak_period_near(times_h, v, P)
+        fap = false_alarm_prob(times_h, v, P, n_indep)
         # Resolution-aware tolerance: the longer the record, the tighter we can
         # localize the peak. Below the M2/S2 resolution length, loosen it.
         tol = 0.12 if rec_days >= res_days else 0.25
         line_ok = ratio > 6.0
         peak_ok = offset <= tol
-        # BOTH must hold: a strong line AND the peak sitting at THIS period,
-        # not at a neighbouring drift frequency. This is what defeats the trap.
-        if line_ok and peak_ok:
+        # Independent significance gate: the line must be unlikely under noise.
+        # The ratio is empirical (calibrated, not derived); FAP is the analytic
+        # check that the ratio threshold isn't just fitting noise. ALL THREE hold
+        # for a real line: strong local SNR, peak at THIS period, low FAP.
+        sig_ok = fap < 0.01
+        if line_ok and peak_ok and sig_ok:
             verdict = "LINE PRESENT"
-        elif line_ok and not peak_ok:
+        elif line_ok and sig_ok and not peak_ok:
             verdict = f"peak off-target ({peak_P:.2f}h) - likely drift, not {name}"
-        elif ratio > 3.0 and peak_ok:
+        elif ratio > 3.0 and peak_ok and fap < 0.05:
             verdict = "marginal"
         else:
             verdict = "absent"
         out["constituents"][name] = {
             "period_h": P,
             "sharp_line_ratio": round(ratio, 2),
+            "false_alarm_prob": float(f"{fap:.2e}"),
             "peak_period_h": round(peak_P, 3),
             "peak_offset_h": round(offset, 3),
             "verdict": verdict,
