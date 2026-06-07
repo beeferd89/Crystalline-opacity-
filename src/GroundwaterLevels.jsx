@@ -34,7 +34,9 @@ function parseSeries(ts) {
   const vals = (ts.values || [])[0]?.value || [];
   const last = vals.length ? vals[vals.length - 1] : null;
   const raw = last ? parseFloat(last.value) : null;
-  const depth = raw !== null && raw !== -999999 ? raw : null;
+  // Number.isFinite rejects NaN (non-numeric value strings) and the USGS
+  // -999999 no-data sentinel; without it NaN slips through as a fake reading.
+  const depth = Number.isFinite(raw) && raw !== -999999 ? raw : null;
   const dateTime = last?.dateTime || null;
   const qualifier = last?.qualifiers?.[0] || null;
 

@@ -94,18 +94,44 @@ def phase_at(times_h, values, period_h):
         sr += v * math.cos(a); si += v * math.sin(a)
     return math.atan2(si, sr)
 
-def peak_period_near(times_h, values, target_h, search_h=0.7, steps=400):
-    """Find the period of the actual power peak in a narrow window around a
-    target constituent. THE discriminator: a real constituent peaks at its own
-    exact period; a nearby drift peaks at the DRIFT period, not the target.
+def peak_period_near(times_h, values, target_h, search_h=0.5, steps=400):
+    """Find THIS constituent's own spectral peak, isolated from its neighbours.
+
+    THE discriminator: a real constituent peaks at its OWN exact period; a nearby
+    drift peaks at the DRIFT period, not the target. Two traps are defeated here:
+
+      1. NEIGHBOUR LINES. The search is confined to the target's Voronoi cell -
+         the half-way points to the nearest constituents on either side. Without
+         this, a strong S2 (12.00h, only 0.42h from M2) or N2 (12.66h, 0.24h
+         from M2) is picked as the "peak" and a genuine but weaker M2 is falsely
+         rejected as drift. Clamping to the cell keeps each line in its own lane.
+
+      2. DRIFT / SHOULDERS. A real line shows an INTERIOR local maximum at its
+         period. Drift, or a neighbouring line leaking in, shows only a monotonic
+         shoulder whose maximum sits at the cell BOUNDARY. A peak pinned to the
+         edge is therefore reported as far off-target, not as this constituent.
+
     Returns (peak_period_h, peak_power, offset_from_target_h)."""
-    lo, hi = target_h - search_h, target_h + search_h
-    best_P, best_p = target_h, -1.0
+    # Voronoi cell: half-way to the nearest constituent below and above target,
+    # capped by search_h so isolated constituents (K1/O1) still get a finite band.
+    below = [c for c in CONSTITUENTS.values() if c < target_h - 1e-9]
+    above = [c for c in CONSTITUENTS.values() if c > target_h + 1e-9]
+    lo = target_h - search_h
+    hi = target_h + search_h
+    if below:
+        lo = max(lo, (target_h + max(below)) / 2.0)
+    if above:
+        hi = min(hi, (target_h + min(above)) / 2.0)
+    best_s, best_P, best_p = -1, target_h, -1.0
     for s in range(steps + 1):
         P = lo + (hi - lo) * s / steps
         p = power_at(times_h, values, P)
         if p > best_p:
-            best_p, best_P = p, P
+            best_p, best_P, best_s = p, P, s
+    # A peak pinned to the cell edge is a shoulder (drift / neighbour leakage),
+    # not this constituent's own line: report it as decisively off-target.
+    if best_s == 0 or best_s == steps:
+        return best_P, best_p, search_h + 1.0
     return best_P, best_p, abs(best_P - target_h)
 
 
@@ -279,6 +305,7 @@ def self_test():
         ("D weak tide, heavy noise           ", dict(days=21, dt_min=15, amp_m2=0.35, amp_s2=0.16, noise=1.0, drift_amp=0.1)),
         ("E real tide + heavy near-M2 drift  ", dict(days=28, dt_min=15, amp_m2=1.0, amp_s2=0.46, noise=0.4, drift_amp=0.9)),
         ("F short record real tide (5 days)  ", dict(days=5,  dt_min=15, amp_m2=1.0, amp_s2=0.46, noise=0.4, drift_amp=0.05)),
+        ("G strong S2, weak but REAL M2      ", dict(days=28, dt_min=15, amp_m2=0.25, amp_s2=1.0, noise=0.4, drift_amp=0.05)),
     ]
     for label, kw in cases:
         th, vals = _synth(**kw)
@@ -287,8 +314,10 @@ def self_test():
         print(f"{label} | M2 ratio={m2['sharp_line_ratio']:7.2f} ({m2['verdict']:>12}) "
               f"S2={s2['sharp_line_ratio']:6.2f} | {r['record_days']}d | {r['overall']}")
     print("\nExpected: A LINE, B absent, C absent(drift rejected), D marginal/LINE,")
-    print("E LINE (tide survives drift), F LINE-but-caveated (short record).")
+    print("E LINE (tide survives drift), F LINE-but-caveated (short record),")
+    print("G M2 LINE PRESENT even though S2 is 4x stronger (no neighbour hijack).")
     print("If C reads absent, the drift trap is correctly defeated by the sharp-line test.")
+    print("If G's M2 reads LINE PRESENT, a strong neighbour line does not steal M2's verdict.")
 
 
 if __name__ == "__main__":
