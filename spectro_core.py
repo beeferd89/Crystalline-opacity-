@@ -473,11 +473,27 @@ class IngestSource(Protocol):
 
 Spectrumish = Union[SampledSignal, BinnedSpectrum, IngestSource]
 
+def _wrap_pair(obj) -> BinnedSpectrum:
+    """Adapt a foreign faceted Spectrum (e.g. kinect_optical.Spectrum) that
+    exposes .as_pair() -> (channels, intensities) into a BinnedSpectrum.
+
+    This is the documented bridge: external drivers carry rich metadata
+    (calibration, ROI, digest) the core doesn't need to know about, but they
+    all reduce to "intensity per discretized channel along one axis" - which
+    is exactly BinnedSpectrum's shape. It is the PHYSICALLY correct target,
+    too: a camera/grating channel axis is binned and its counting statistics
+    are Poisson, the same regime as XRF/gamma - not a time series to run
+    Lomb-Scargle over (that would treat wavelength as if it were time)."""
+    channels, intensities = obj.as_pair()
+    return BinnedSpectrum(tuple(channels), tuple(intensities))
+
 def _as_spectrum(x) -> Union[SampledSignal, BinnedSpectrum]:
     if isinstance(x, (SampledSignal, BinnedSpectrum)):
         return x
+    if hasattr(x, "as_pair"):
+        return _wrap_pair(x)
     if hasattr(x, "read_spectrum"):
-        return x.read_spectrum()
+        return _as_spectrum(x.read_spectrum())
     raise TypeError(f"not a spectrum or IngestSource: {type(x)}")
 
 def analyze_spectrum(source: Spectrumish, catalog: LineCatalog,
