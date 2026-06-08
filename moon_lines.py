@@ -41,6 +41,25 @@ GO / HOLD / STOP - SAME GATE AS THE LEDGER, NEW CHANNEL
   the signal, so the light-based read is HOLD/STOP even when the geometric
   bearing is GO. The geometry doesn't care about phase; the photons do.
 
+  Third channel - DOPPLER. The Earth-Moon range is not constant, so any signal
+  referenced to the Moon (radar echo, moonbounce/EME, a laser ranging return)
+  comes back shifted in frequency. Two real, additive, geometric contributions:
+    ORBITAL    : the Moon's distance from Earth's centre breathes between
+                 perigee and apogee over the ~27.3-day anomalistic month.
+                 Read straight off the geocentric distance via a centred
+                 numerical derivative - no extra theory needed.
+    ROTATIONAL : you are not standing still. Earth's spin carries the observer
+                 eastward at up to ~0.46 km/s (latitude-scaled), and whatever
+                 component of THAT velocity points along the line of sight to
+                 the Moon adds to (or fights) the orbital term. This is the
+                 dominant, fast-varying part - the reason moonbounce operators
+                 retune through a pass. It shares the bearing's az/alt geometry,
+                 so it shares the bearing's gate: same HORIZON_BAND, third
+                 channel, nothing new invented.
+  Reported as a signed range-rate (m/s, + = receding/redshift, - = approaching/
+  blueshift) and as a fractional shift in parts-per-billion, both one-way and
+  doubled for an echo (the path closes or opens on both legs of a round trip).
+
 PRECISION
   Low-precision lunar theory (Schlyter) with the main perturbation terms.
   Good to roughly 0.1-0.2 deg in bearing - far inside a compass's needs.
@@ -70,6 +89,12 @@ def rev(d): return d % 360.0      # normalize to [0,360)
 # ---- gate thresholds (the only knobs; both are physical, not magic) ---------
 HORIZON_BAND = 10.0   # deg above horizon below which parallax+refraction blur the fix
 ILLUM_MIN    = 0.10   # illuminated fraction below which the luminescent channel goes dark
+
+# ---- physical constants for the Doppler channel (constants, not knobs) -----
+EARTH_RADIUS_KM  = 6371.0       # mean radius -> converts geocentric distance and
+                                # rotation rate into real-world km and km/s
+SIDEREAL_DAY_S   = 86164.0905   # the clock Earth's spin actually runs on
+LIGHT_SPEED_KM_S = 299792.458   # c -> converts a range-rate into a fractional shift
 
 
 def day_number(dt_utc):
@@ -175,6 +200,52 @@ def local_sidereal_time(d, lon_east, ut_hours):
     return rev(lst_hours * 15.0)
 
 
+def _doppler(d, lat_deg, az_deg, alt_deg):
+    """Topocentric range-rate (km/s) and the fractional Doppler shift it implies.
+
+    Two contributions, summed along the line of sight - both real geometry,
+    nothing fitted or invented:
+
+      ORBITAL    : how fast the Earth-Moon distance itself is changing right
+                   now. A centred numerical derivative of the geocentric
+                   distance over a +/- 1 hour window - short enough that the
+                   ~27-day breathing is locally linear, long enough that the
+                   float subtraction isn't noise.
+      ROTATIONAL : the observer's eastward speed from Earth's spin,
+                   v_rot = omega_earth * R_earth * cos(latitude), projected
+                   onto the line-of-sight direction to the Moon. In a local
+                   East-North-Up frame the LOS unit vector is
+                   (sin(az)cos(alt), cos(az)cos(alt), sin(alt)); the observer's
+                   velocity is purely eastward, so the dot product collapses to
+                   v_rot * sin(az) * cos(alt). Positive means the spin is
+                   carrying the observer toward the Moon's bearing - closing
+                   the range - so it SUBTRACTS from the rate of change of range.
+
+    Doppler: a growing range redshifts (delta-f/f = -range_rate / c); a
+    shrinking range blueshifts. An echo (radar / moonbounce / EME) crosses the
+    gap twice, so its shift is double the one-way figure.
+    """
+    DT_DAYS = 1.0 / 24.0
+    r_minus = moon_position(d - DT_DAYS)["r"]
+    r_plus  = moon_position(d + DT_DAYS)["r"]
+    orbital_km_s = (r_plus - r_minus) * EARTH_RADIUS_KM / (2.0 * DT_DAYS * 86400.0)
+
+    v_rot = (2.0 * math.pi * EARTH_RADIUS_KM / SIDEREAL_DAY_S) * cos(lat_deg)
+    rotational_km_s = -v_rot * sin(az_deg) * cos(alt_deg)
+
+    range_rate_km_s = orbital_km_s + rotational_km_s
+    one_way_ppb = -range_rate_km_s / LIGHT_SPEED_KM_S * 1e9
+    echo_ppb = 2.0 * one_way_ppb
+
+    return {
+        "range_rate_km_s": range_rate_km_s,
+        "orbital_km_s": orbital_km_s,
+        "rotational_km_s": rotational_km_s,
+        "shift_one_way_ppb": one_way_ppb,
+        "shift_echo_ppb": echo_ppb,
+    }
+
+
 def moon_fix(lat_deg, lon_east_deg, when_utc=None, altitude_m=0.0):
     """Full topocentric fix: bearing, altitude, phase, and the go/hold/stop gate."""
     if when_utc is None:
@@ -206,6 +277,8 @@ def moon_fix(lat_deg, lon_east_deg, when_utc=None, altitude_m=0.0):
 
     geo_verdict, geo_reason = _gate_geometry(alt)
     lum_verdict, lum_reason = _gate_luminescent(alt, illum)
+    dop = _doppler(d, lat_deg, az, alt)
+    dop_verdict, dop_reason = _gate_doppler(alt, dop["range_rate_km_s"])
 
     return {
         "when_utc": when_utc.isoformat(timespec="seconds"),
@@ -215,6 +288,7 @@ def moon_fix(lat_deg, lon_east_deg, when_utc=None, altitude_m=0.0):
         "distance_earth_radii": m["r"],
         "geometry": {"verdict": geo_verdict, "reason": geo_reason},
         "luminescent": {"verdict": lum_verdict, "reason": lum_reason},
+        "doppler": {"verdict": dop_verdict, "reason": dop_reason, **dop},
     }
 
 
@@ -226,6 +300,18 @@ def _gate_geometry(alt):
                         f"{HORIZON_BAND:.0f} deg horizon band where parallax+"
                         f"refraction blur the bearing ~1 deg.")
     return "GO", f"Moon clear of horizon ({alt:.1f} deg). Bearing trustworthy."
+
+
+def _gate_doppler(alt, range_rate_km_s):
+    """Same gate as the bearing: a clean Doppler read leans on the same az/alt
+    geometry as the compass, so the same horizon-band uncertainty blurs both."""
+    if alt < 0.0:
+        return "STOP", "Moon below horizon. No path - nothing to shift."
+    if alt < HORIZON_BAND:
+        return "HOLD", (f"Moon low ({alt:.1f} deg); the same horizon-band blur "
+                        f"that softens the bearing softens the rotational term.")
+    return "GO", (f"Clear path; range-rate {range_rate_km_s*1000.0:+.0f} m/s "
+                  f"is a clean read.")
 
 
 def _gate_luminescent(alt, illum):
@@ -248,7 +334,7 @@ def _phase_name(elong, waxing):
 
 
 def format_fix(f):
-    g, l = f["geometry"], f["luminescent"]
+    g, l, dp = f["geometry"], f["luminescent"], f["doppler"]
     return "\n".join([
         f"  time (UTC) : {f['when_utc']}",
         f"  position   : lat {f['lat']:.4f}, lon {f['lon_east']:.4f}"
@@ -258,9 +344,14 @@ def format_fix(f):
         f"  altitude     : {f['altitude_deg']:6.1f} deg   "
         + ("(above horizon)" if f['altitude_deg'] >= 0 else "(below horizon)"),
         f"  phase        : {f['phase']}  ({f['illum_frac']*100:.0f}% lit)",
+        f"  range-rate   : {dp['range_rate_km_s']*1000:+6.0f} m/s   "
+        + ("(receding -> redshift)" if dp['range_rate_km_s'] >= 0 else "(approaching -> blueshift)"),
+        f"  Doppler      : {dp['shift_one_way_ppb']:+7.1f} ppb one-way   "
+        f"{dp['shift_echo_ppb']:+7.1f} ppb echo (radar/EME)",
         "",
         f"  COMPASS  (geometry)    : {g['verdict']:4}  {g['reason']}",
         f"  LIGHT    (luminescent) : {l['verdict']:4}  {l['reason']}",
+        f"  DOPPLER  (range-rate)  : {dp['verdict']:4}  {dp['reason']}",
     ])
 
 
@@ -316,13 +407,39 @@ def _self_test():
     print(f"[{'PASS' if passed else 'FAIL'}] bearing/altitude in range "
           f"(az {f['azimuth_deg']:.0f}, alt {f['altitude_deg']:.0f})")
 
-    # 5) Gate consistency: below-horizon must force BOTH channels to STOP.
+    # 5) Gate consistency: below-horizon must force ALL THREE channels to STOP.
+    fixes = [moon_fix(40.90, -80.86, datetime(2026,6,8,h,0,0,tzinfo=timezone.utc))
+             for h in range(24)]
     consistent = all(
-        not (ff["geometry"]["verdict"] == "STOP" and ff["luminescent"]["verdict"] != "STOP")
-        for ff in (moon_fix(40.90, -80.86,
-                   datetime(2026,6,8,h,0,0,tzinfo=timezone.utc)) for h in range(24)))
+        not (ff["geometry"]["verdict"] == "STOP"
+             and (ff["luminescent"]["verdict"] != "STOP" or ff["doppler"]["verdict"] != "STOP"))
+        for ff in fixes)
     ok &= consistent
-    print(f"[{'PASS' if consistent else 'FAIL'}] below-horizon forces both gates to STOP")
+    print(f"[{'PASS' if consistent else 'FAIL'}] below-horizon forces all three gates to STOP")
+
+    # 6) Range-rate must sit inside its physical envelope: orbital breathing
+    #    (a few tens of m/s, from the ~27-day perigee/apogee cycle) plus the
+    #    rotational term, which can be no larger than Earth's own spin speed
+    #    (omega_earth * R_earth =~ 0.46 km/s at the equator, less elsewhere).
+    #    A bug that mixed up units or dropped the cos(lat) would blow past this.
+    rates = [ff["doppler"]["range_rate_km_s"] for ff in fixes]
+    envelope = (2*math.pi*EARTH_RADIUS_KM/SIDEREAL_DAY_S) + 0.1
+    passed = all(abs(rt) < envelope for rt in rates)
+    ok &= passed
+    print(f"[{'PASS' if passed else 'FAIL'}] range-rate within physical envelope "
+          f"(|rate| max {max(abs(rt) for rt in rates)*1000:.0f} m/s, "
+          f"envelope {envelope*1000:.0f} m/s)")
+
+    # 7) The rotational term must change sign over a day: the Moon crosses from
+    #    one side of the sky to the other, and Earth's spin carries the observer
+    #    toward it on one side and away on the other. A real geometric quantity
+    #    flips; a constant bias would mean sin(az) (or the sign convention) is
+    #    wrong. Same falsifiability spirit as the horizon-crossing check above.
+    rotational = [ff["doppler"]["rotational_km_s"] for ff in fixes]
+    passed = max(rotational) > 0 and min(rotational) < 0
+    ok &= passed
+    print(f"[{'PASS' if passed else 'FAIL'}] rotational Doppler term changes sign over 24 h "
+          f"(max {max(rotational)*1000:+.0f}, min {min(rotational)*1000:+.0f} m/s)")
 
     print("\n" + ("ALL PASS - method is sound; feed it a real position."
                    if ok else "FAIL - do not trust fixes until this passes."))
