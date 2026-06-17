@@ -1,0 +1,10 @@
+# SwiftPM build artifacts
+.build/
+.swiftpm/
+
+# --- Sealed soma (patented CrystallineOpacity math) ---
+# This file holds the four novel patent elements (φ-spiral basis,
+# polar dipole transform, coherence-coupled soma, φ-decay expansion).
+# It is NEVER committed. Without it the daemon falls back to the
+# calibrated path and still builds, runs, and serves status.
+Sources/guardian/GuardianEngine+Opacity.swift

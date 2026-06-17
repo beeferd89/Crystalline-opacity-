@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.kibler.guardian</string>
+
+    <!-- EDIT THIS PATH before installing: point it at your built binary.
+         After `swift build -c release` the binary lands at:
+           <repo>/guardian/.build/release/guardian
+         Use an absolute path here (LaunchAgents do not expand ~ or $HOME). -->
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/local/bin/guardian</string>
+        <string>--headless</string>
+        <string>--opacity</string>
+        <string>--port</string>
+        <string>8547</string>
+    </array>
+
+    <!-- Boot on login and keep the daemon alive (restart if it exits). -->
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+
+    <!-- stdout/stderr go to the log the daemon rotates at >50MB on startup. -->
+    <key>StandardOutPath</key>
+    <string>/tmp/guardian.log</string>
+    <key>StandardErrorPath</key>
+    <string>/tmp/guardian.log</string>
+
+    <!-- Long-running background service. -->
+    <key>ProcessType</key>
+    <string>Background</string>
+</dict>
+</plist>
