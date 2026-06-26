@@ -43,12 +43,20 @@ from opacity_lens import Signal, default_monocle, look_through
 # Array order is fast -> slow. Each kind holds its own slot, so a fast
 # read never overwrites the slow floor. Each renders to its own felt
 # pulse-width so the skin can tell the kinds apart.
+#
+# ttl is how long a surviving read stays "present" before the array dims
+# it back to absent \u2014 each kind decays on its OWN time constant, so a
+# doppler blip fades in seconds while the circadian floor holds a full
+# day. barcode has no ttl: the anchor persists until a new scan replaces
+# it. This is what makes the array honest about absence, not just presence.
+
+DAY = 24 * 3600
 
 INPUTS = {
-    "barcode":   {"glyph": "\u25c9", "felt": [40],            "role": "anchor"},
-    "doppler":   {"glyph": "\u219d", "felt": [40, 60, 40],    "role": "live"},
-    "tidal":     {"glyph": "\u2248", "felt": [200],           "role": "live"},
-    "circadian": {"glyph": "\u25d0", "felt": [400, 120, 400], "role": "live"},
+    "barcode":   {"glyph": "\u25c9", "felt": [40],            "role": "anchor", "ttl": None},
+    "doppler":   {"glyph": "\u219d", "felt": [40, 60, 40],    "role": "live",   "ttl": 30},
+    "tidal":     {"glyph": "\u2248", "felt": [200],           "role": "live",   "ttl": 3 * 3600},
+    "circadian": {"glyph": "\u25d0", "felt": [400, 120, 400], "role": "live",   "ttl": DAY},
 }
 
 DEFAULT_CONFIDENCE = 0.9
@@ -101,13 +109,27 @@ def parse_signal(content, t):
 ARRAY = {kind: None for kind in INPUTS}
 
 
+def slot_live(kind):
+    """True if this slot holds a read that hasn't aged past its ttl. A None
+    ttl (the barcode anchor) is always live once set. Expired slots are
+    treated as absent everywhere — visual AND felt — so the array stops
+    showing or buzzing a read that has gone stale."""
+    slot = ARRAY[kind]
+    if slot is None:
+        return False
+    ttl = INPUTS[kind]["ttl"]
+    if ttl is None:
+        return True
+    return (time.time() - slot["t"]) <= ttl
+
+
 def project_visual():
     """Render the whole array as one present field for the channel."""
     lines = ["**array** \u2014 present field"]
     for kind, spec in INPUTS.items():
         slot = ARRAY[kind]
         tag = " \u00b7 anchor" if spec["role"] == "anchor" else ""
-        if slot is None:
+        if not slot_live(kind):
             lines.append(f"`{spec['glyph']}` {kind:<9} \u2014 \u2014\u2014{tag}")
         else:
             age = time.time() - slot["t"]
@@ -119,12 +141,16 @@ def project_visual():
 
 
 def project_felt():
-    """The felt channel: concatenated pulse pattern for present slots,
-    fast->slow, gaps between kinds. This is the seam the phone drives via
+    """The felt channel: concatenated pulse pattern for the live array —
+    doppler + tidal + circadian, fast->slow, gaps between kinds. The
+    barcode anchor pins position but is NOT felt, so the skin reads only
+    the three opacity signals. This is the seam the phone drives via
     navigator.vibrate([...]). Emitted as data; the phone renders it."""
     pattern = []
     for kind, spec in INPUTS.items():
-        if ARRAY[kind] is not None:
+        if spec["role"] == "anchor":
+            continue                     # anchor pins position; it is not felt
+        if slot_live(kind):
             pattern.extend(spec["felt"])
             pattern.append(120)          # inter-kind gap
     return pattern
