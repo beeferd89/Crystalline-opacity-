@@ -1,72 +1,87 @@
 #!/usr/bin/env python3
 """
-opacity_bus.py  —  Discord carrier + lens seam
+opacity_bus.py  —  Discord projector + lens seam
 Kibler AI Solutions Corp.
 
-The bus. One channel, one bot. Turns a Discord message into a Signal,
-runs it through the monocle (opacity_lens), publishes the verdict +
-receipt back to the same channel.
+The bus, flipped from gate to PROJECTOR. One channel, one bot.
+Each inbound Signal is still adjudicated alone by the monocle
+(opacity_lens) — per-signal honesty, unchanged. What changed is the
+OUTPUT: surviving reads are held as a standing ARRAY and projected as
+one present field on two channels at once —
 
-Role: this is the CARRIER, same job the iPhone does in the yard-walk
-stack — capture, transceive, write the signal line. It does NOT fuse.
-Barcode stays a registration anchor; the lens stack adjudicates each
-signal alone. Fusion (drone_fusion) is a separate gate downstream.
+    visual  -> the Discord channel render
+    felt    -> a haptic line the phone side drives (navigator.vibrate)
 
-One writer per surface: the bot is the only thing that writes verdicts
-to the channel; inbound scans are the only thing that writes signals in.
+The inputs are NOT fused to a single verdict. They are arrayed and cast.
+Four reads, four time constants, held side by side, projected together:
 
-Drop next to opacity_lens.py on the Mac Mini. Needs:
+    barcode    instant   registration anchor   (pins position; NOT opacity)
+    doppler    fast      motion / velocity shift
+    tidal      hours     slow pull / liquidity swing
+    circadian  daily     slow floor
+
+Multi -> single -> multi: many reads in, through the one bus, out as the
+arrayed presence. Barcode anchors; the other three are the live array.
+
+One writer per surface: the bot is the only thing that writes the
+projection; inbound reads are the only thing that writes signals in.
+
+Drop next to opacity_lens.py. Needs:
     pip install discord.py
     env: DISCORD_BOT_TOKEN, OPACITY_CHANNEL_ID
 """
 
 import os
 import json
+import time
 import discord
 
 from opacity_lens import Signal, default_monocle, look_through
 
 
-# --- the frozen signal-line contract -------------------------------------
-# A channel message becomes ONE Signal. Accepted inbound shapes, in order:
-#
-#   1. JSON:   {"kind":"barcode","payload":"036000291452","confidence":0.95}
-#   2. typed:  barcode:036000291452        (confidence defaults below)
-#   3. bare:   036000291452                (assumed barcode)
-#
-# t is ALWAYS the message's own timestamp — never trusted from the payload,
-# so the debounce lens reads real arrival time. fingerprint is left empty;
-# Signal.__post_init__ stamps it. This is the seam: anything that can write
-# one of these three shapes can write to the gate.
+# --- the four inputs, by time constant -----------------------------------
+# Array order is fast -> slow. Each kind holds its own slot, so a fast
+# read never overwrites the slow floor. Each renders to its own felt
+# pulse-width so the skin can tell the kinds apart.
+
+INPUTS = {
+    "barcode":   {"glyph": "\u25c9", "felt": [40],            "role": "anchor"},
+    "doppler":   {"glyph": "\u219d", "felt": [40, 60, 40],    "role": "live"},
+    "tidal":     {"glyph": "\u2248", "felt": [200],           "role": "live"},
+    "circadian": {"glyph": "\u25d0", "felt": [400, 120, 400], "role": "live"},
+}
 
 DEFAULT_CONFIDENCE = 0.9
 
 
-def parse_signal(content: str, t: float):
+# --- the frozen signal-line contract -------------------------------------
+# A channel message becomes ONE Signal. Accepted inbound shapes:
+#   1. JSON:   {"kind":"tidal","payload":0.37,"confidence":0.9}
+#   2. typed:  doppler:12.4          (kind:payload)
+#   3. bare:   036000291452          (assumed barcode scan)
+# t is ALWAYS the message timestamp — never the payload — so debounce
+# reads real arrival time. fingerprint is left empty; Signal stamps it.
+
+def parse_signal(content, t):
     content = content.strip()
     if not content:
         return None
 
-    # shape 1: JSON
     if content.startswith("{"):
         try:
             d = json.loads(content)
-            return Signal(
-                kind=str(d["kind"]),
-                payload=d["payload"],
-                confidence=float(d.get("confidence", DEFAULT_CONFIDENCE)),
-                t=t,
-            )
+            return Signal(kind=str(d["kind"]), payload=d["payload"],
+                          confidence=float(d.get("confidence", DEFAULT_CONFIDENCE)),
+                          t=t)
         except (ValueError, KeyError, TypeError):
             return None
 
-    # shape 2: typed  kind:payload
     if ":" in content:
         kind, _, payload = content.partition(":")
         kind = kind.strip().lower()
-        if kind in ("barcode", "doppler"):
+        if kind in INPUTS:
             val = payload.strip()
-            if kind == "doppler":
+            if kind in ("doppler", "tidal", "circadian"):
                 try:
                     val = float(val)
                 except ValueError:
@@ -74,23 +89,48 @@ def parse_signal(content: str, t: float):
             return Signal(kind=kind, payload=val,
                           confidence=DEFAULT_CONFIDENCE, t=t)
 
-    # shape 3: bare — assume a barcode scan
     return Signal(kind="barcode", payload=content,
                   confidence=DEFAULT_CONFIDENCE, t=t)
 
 
-def verdict_line(result: dict) -> str:
-    """One-line human verdict for the channel, from look_through output."""
-    sig = result["signals"][0]
-    fp = sig["fingerprint"]
-    if sig["survived"]:
-        return (f"✅ `{fp}` {sig['kind']} → "
-                f"**{sig['final_state']}** (intensity {sig['final_intensity']})")
-    return (f"⛔ `{fp}` {sig['kind']} → "
-            f"**BLOCKED** by {sig['blocked_by']}")
+# --- the standing array ---------------------------------------------------
+# One slot per input kind. Holds the most recent SURVIVING read. The array
+# is the presence: four slots, side by side, never merged. Empty slots
+# render dim — the array shows what's present AND what's absent.
+
+ARRAY = {kind: None for kind in INPUTS}
 
 
-# --- the carrier ----------------------------------------------------------
+def project_visual():
+    """Render the whole array as one present field for the channel."""
+    lines = ["**array** \u2014 present field"]
+    for kind, spec in INPUTS.items():
+        slot = ARRAY[kind]
+        tag = " \u00b7 anchor" if spec["role"] == "anchor" else ""
+        if slot is None:
+            lines.append(f"`{spec['glyph']}` {kind:<9} \u2014 \u2014\u2014{tag}")
+        else:
+            age = time.time() - slot["t"]
+            lines.append(
+                f"`{spec['glyph']}` {kind:<9} {slot['state']}  "
+                f"(i {slot['intensity']}, {age:4.0f}s ago){tag}"
+            )
+    return "\n".join(lines)
+
+
+def project_felt():
+    """The felt channel: concatenated pulse pattern for present slots,
+    fast->slow, gaps between kinds. This is the seam the phone drives via
+    navigator.vibrate([...]). Emitted as data; the phone renders it."""
+    pattern = []
+    for kind, spec in INPUTS.items():
+        if ARRAY[kind] is not None:
+            pattern.extend(spec["felt"])
+            pattern.append(120)          # inter-kind gap
+    return pattern
+
+
+# --- the carrier / projector ---------------------------------------------
 
 CHANNEL_ID = int(os.environ.get("OPACITY_CHANNEL_ID", "0"))
 TOKEN = os.environ.get("DISCORD_BOT_TOKEN", "")
@@ -103,22 +143,37 @@ monocle = default_monocle()
 
 @client.event
 async def on_ready():
-    print(f"bus up as {client.user} — watching channel {CHANNEL_ID}")
+    print(f"projector up as {client.user} \u2014 channel {CHANNEL_ID}")
 
 
 @client.event
-async def on_message(message: discord.Message):
+async def on_message(message):
     if message.author == client.user:
-        return                          # never adjudicate our own verdicts
+        return                           # never re-read our own projection
     if CHANNEL_ID and message.channel.id != CHANNEL_ID:
-        return                          # one channel, one bus
+        return                           # one channel, one bus
 
     sig = parse_signal(message.content, message.created_at.timestamp())
-    if sig is None:
-        return                          # not signal-shaped; ignore
+    if sig is None or sig.kind not in INPUTS:
+        return
 
+    # per-signal honesty: the lens stack still adjudicates each read alone
     result = look_through([sig], monocle)
-    await message.channel.send(verdict_line(result))
+    r = result["signals"][0]
+    if not r["survived"]:
+        await message.channel.send(
+            f"\u26d4 `{r['fingerprint']}` {sig.kind} blocked by {r['blocked_by']}")
+        return
+
+    # survived -> update its slot in the standing array
+    ARRAY[sig.kind] = {
+        "state": r["final_state"],
+        "intensity": r["final_intensity"],
+        "t": time.time(),
+    }
+
+    # project the array: visual to the channel, felt as the haptic line
+    await message.channel.send(project_visual() + f"\n`felt:` {project_felt()}")
 
 
 if __name__ == "__main__":
