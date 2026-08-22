@@ -3,11 +3,13 @@ import ReactDOM from "react-dom/client";
 import LiveTurret from "./LiveTurret";
 import GuardianLens from "./GuardianLens";
 import GroundwaterLevels from "./GroundwaterLevels";
+import CrystalComposer from "./CrystalComposer";
 
 const TOOLS = [
   { id: "turret", label: "the live turret", component: LiveTurret },
   { id: "guardian", label: "GuardianLens", component: GuardianLens },
   { id: "groundwater", label: "Groundwater Levels", component: GroundwaterLevels },
+  { id: "crystal", label: "Crystal Composer", component: CrystalComposer },
 ];
 
 function App() {
