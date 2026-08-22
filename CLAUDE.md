@@ -26,6 +26,7 @@ src/
   LiveTurret.jsx      Tool: "the live turret" — three-lens constitutional reader
   GuardianLens.jsx    Tool: "GuardianLens" — bounded multi-agent rigor instrument
   GroundwaterLevels.jsx  Tool: USGS NWIS Ohio groundwater-level viewer
+  CrystalComposer.jsx    Tool: "Crystal Composer" — local ballast/Helios/Guardian agent composer
 portability_layer.py  Standalone Python skeleton — "canon meeting" form-checker
 tidal_lines.py        Standalone Python script — tidal-signal discriminator (has a synthetic self-test)
 guardian_hq_topology.html  Standalone static HTML report (network topology record)
@@ -58,6 +59,7 @@ const TOOLS = [
   { id: "turret", label: "the live turret", component: LiveTurret },
   { id: "guardian", label: "GuardianLens", component: GuardianLens },
   { id: "groundwater", label: "Groundwater Levels", component: GroundwaterLevels },
+  { id: "crystal", label: "Crystal Composer", component: CrystalComposer },
 ];
 ```
 Each tool is a single self-contained default-exported component in `src/`.
@@ -127,6 +129,18 @@ Pure data-fetch/display tool: pulls from the public USGS NWIS API
 sortable/filterable/paginated table. No API key needed. Follow its existing
 patterns for `useMemo`-based filtering/sorting and `PAGE_SIZE`-based paging if
 extending it.
+
+### CrystalComposer (no LLM, no network)
+
+A purely local instrument: pick facets (character / operations / constraints)
+and three bounded stages run over the selection — **ballast** (a constitutional
+resting potential weighted toward constraint anchors), **helios** (a debounced
+orienting sweep that only runs inside the Van Allen passband and never
+authorizes anything), and the **guardian engine** (an A/B-wave read of the
+dispersed field against ballast, reporting STABLE or DRIFT). "Deploy" writes an
+in-page compiled record only — nothing is sent anywhere, and any change to the
+facet set invalidates it. Keep it network-free and keep the gating semantics if
+you extend it.
 
 ## Standalone Python scripts
 
